@@ -11,6 +11,7 @@ import numpy as np
 import argparse
 import warnings
 import time
+import imutils
 
 from src.anti_spoof_predict import AntiSpoofPredict
 from src.generate_patches import CropImage
@@ -58,7 +59,6 @@ def test(image_name, model_dir, device_id):
         start = time.time()
         prediction += model_test.predict(img, os.path.join(model_dir, model_name))
         test_speed += time.time()-start
-
     # draw result of prediction
     label = np.argmax(prediction)
     value = prediction[0][label]/2
@@ -86,7 +86,73 @@ def test(image_name, model_dir, device_id):
     result_image_name = image_name.replace(format_, "_result" + format_)
     cv2.imwrite(SAMPLE_IMAGE_PATH + result_image_name, image)
 
+def webcam(model_dir,device_id):
+    model_test = AntiSpoofPredict(device_id)
+    image_cropper = CropImage()
+    color = (255, 0, 0)
+    cap = cv2.VideoCapture(0)
+    prev_frame_time = 0 
 
+    while True:
+        ret,frame = cap.read()
+        frame = imutils.resize(frame, width=640)
+
+        new_frame_time = time.time()
+        fps = 1/(new_frame_time-prev_frame_time) 
+        prev_frame_time = new_frame_time 
+        fps = str(int(fps))
+        font = cv2.FONT_HERSHEY_SIMPLEX 
+        cv2.putText(frame, fps, (7, 70), font, 3, (100, 255, 0), 3, cv2.LINE_AA)
+
+        image_bbox = model_test.get_bbox(frame)
+        prediction = np.zeros((1, 3))
+        test_speed = 0
+        # sum the prediction from single model's result
+        for model_name in os.listdir(model_dir):
+            h_input, w_input, model_type, scale = parse_model_name(model_name)
+            param = {
+                "org_img": frame,
+                "bbox": image_bbox,
+                "scale": scale,
+                "out_w": w_input,
+                "out_h": h_input,
+                "crop": True,
+            }
+            if scale is None:
+                param["crop"] = False
+            img = image_cropper.crop(**param)
+            start = time.time()
+            prediction += model_test.predict(img, os.path.join(model_dir, model_name))
+            test_speed += time.time()-start
+
+        # draw result of prediction
+        label = np.argmax(prediction)
+        value = prediction[0][label]/2
+        if label == 1:
+            # print("Image '{}' is Real Face. Score: {:.2f}.".format(image_name, value))
+            result_text = "RealFace Score: {:.2f}".format(value)
+            color = (255, 0, 0)
+        else:
+            # print("Image '{}' is Fake Face. Score: {:.2f}.".format(image_name, value))
+            result_text = "FakeFace Score: {:.2f}".format(value)
+            color = (0, 0, 255)
+
+        cv2.rectangle(
+            frame,
+            (image_bbox[0], image_bbox[1]),
+            (image_bbox[0] + image_bbox[2], image_bbox[1] + image_bbox[3]),
+            color, 2)
+        cv2.putText(
+            frame,
+            result_text,
+            (image_bbox[0], image_bbox[1] - 5),
+            cv2.FONT_HERSHEY_COMPLEX, 0.5*frame.shape[0]/1024, color)
+        
+        cv2.imshow("Frame", frame)
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord('q'):
+            break
 if __name__ == "__main__":
     desc = "test"
     parser = argparse.ArgumentParser(description=desc)
@@ -106,4 +172,5 @@ if __name__ == "__main__":
         default="image_F1.jpg",
         help="image used to test")
     args = parser.parse_args()
-    test(args.image_name, args.model_dir, args.device_id)
+    # test(args.image_name, args.model_dir, args.device_id)
+    webcam(args.model_dir, args.device_id)
